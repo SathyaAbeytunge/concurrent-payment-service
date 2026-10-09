@@ -13,6 +13,9 @@ import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
+import com.sathya.payment.dto.DepositRequest;
+import com.sathya.payment.exception.InvalidTransferException;
+
 @Service
 @RequiredArgsConstructor
 public class AccountService {
@@ -54,4 +57,23 @@ public class AccountService {
                 account.getCreatedAt()
         );
     }
+
+
+    @Transactional
+    public AccountResponse deposit(UUID accountId, DepositRequest request) {
+
+        Account account = accountRepository.findByIdForUpdate(accountId)
+                .orElseThrow(() -> new AccountNotFoundException(accountId));
+
+        account.setBalance(
+                account.getBalance().add(request.amount())
+        );
+
+        account.setUpdatedAt(OffsetDateTime.now());
+
+        Account savedAccount = accountRepository.save(account);
+
+        return toResponse(savedAccount);
+    }
+
 }

@@ -10,6 +10,8 @@ import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.Map;
 
+import com.sathya.payment.exception.IdempotencyConflictException;
+
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
@@ -79,4 +81,16 @@ public class GlobalExceptionHandler {
                 .status(status)
                 .body(body);
     }
+
+    
+    @ExceptionHandler(IdempotencyConflictException.class)
+    public ResponseEntity<Map<String, Object>> handleIdempotencyConflict(
+            IdempotencyConflictException exception) {
+
+        return buildResponse(
+                HttpStatus.CONFLICT,
+                exception.getMessage()
+        );
+    }
+
 }

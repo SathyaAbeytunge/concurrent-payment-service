@@ -15,6 +15,22 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import com.sathya.payment.entity.IdempotencyKey;
+import com.sathya.payment.dto.TransferResponse;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.time.OffsetDateTime;
+import java.util.HexFormat;
+import java.util.Optional;
+
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
 class TransferServiceTest {
 
     @Test
@@ -73,5 +89,78 @@ class TransferServiceTest {
                 exception.getMessage()
         );
     }
+
+    
+    @Test
+    void shouldReturnSavedResponseWhenSameKeyIsRetried() throws Exception {
+        AccountRepository accountRepository =
+                mock(AccountRepository.class);
+        TransactionRepository transactionRepository =
+                mock(TransactionRepository.class);
+        LedgerEntryRepository ledgerEntryRepository =
+                mock(LedgerEntryRepository.class);
+        IdempotencyKeyRepository idempotencyKeyRepository =
+                mock(IdempotencyKeyRepository.class);
+        ObjectMapper objectMapper = mock(ObjectMapper.class);
+
+        TransferService service = new TransferService(
+                accountRepository,
+                transactionRepository,
+                ledgerEntryRepository,
+                idempotencyKeyRepository,
+                objectMapper
+        );
+
+        UUID sourceId = UUID.randomUUID();
+        UUID targetId = UUID.randomUUID();
+
+        TransferRequest request = new TransferRequest(
+                sourceId,
+                targetId,
+                new java.math.BigDecimal("10.00")
+        );
+
+        String idempotencyKey = "PAY-001";
+
+        String requestData = sourceId + "|"
+                + targetId + "|10";
+
+        String requestHash = HexFormat.of().formatHex(
+                MessageDigest.getInstance("SHA-256").digest(
+                        requestData.getBytes(StandardCharsets.UTF_8)
+                )
+        );
+
+        IdempotencyKey existingKey = IdempotencyKey.builder()
+                .key(idempotencyKey)
+                .requestHash(requestHash)
+                .status(IdempotencyKey.IdempotencyStatus.COMPLETED)
+                .responseBody("saved-response")
+                .build();
+
+        when(idempotencyKeyRepository.tryCreate(
+                eq(idempotencyKey),
+                eq(requestHash),
+                any(OffsetDateTime.class)
+        )).thenReturn(0);
+
+        when(idempotencyKeyRepository.findById(idempotencyKey))
+                .thenReturn(Optional.of(existingKey));
+
+        TransferResponse originalResponse = mock(TransferResponse.class);
+
+        when(objectMapper.readValue(
+                "saved-response",
+                TransferResponse.class
+        )).thenReturn(originalResponse);
+
+        TransferResponse retryResponse = service.transfer(
+                idempotencyKey,
+                request
+        );
+
+        assertSame(originalResponse, retryResponse);
+    }
+
 
 }

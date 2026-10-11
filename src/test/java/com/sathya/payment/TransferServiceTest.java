@@ -10,6 +10,12 @@ import com.sathya.payment.service.TransferService;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.ObjectMapper;
 
+import com.sathya.payment.entity.Account;
+import com.sathya.payment.entity.Transaction;
+import com.sathya.payment.exception.InsufficientFundsException;
+
+import java.math.BigDecimal;
+
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -216,6 +222,114 @@ class TransferServiceTest {
 
         verify(accountRepository, never()).findByIdForUpdate(any());
     }
+
+    
+    @Test
+    void shouldRejectTransferWhenFundsAreInsufficient() {
+        AccountRepository accountRepository =
+                mock(AccountRepository.class);
+        TransactionRepository transactionRepository =
+                mock(TransactionRepository.class);
+        LedgerEntryRepository ledgerEntryRepository =
+                mock(LedgerEntryRepository.class);
+        IdempotencyKeyRepository idempotencyKeyRepository =
+                mock(IdempotencyKeyRepository.class);
+        ObjectMapper objectMapper = mock(ObjectMapper.class);
+
+        TransferService service = new TransferService(
+                accountRepository,
+                transactionRepository,
+                ledgerEntryRepository,
+                idempotencyKeyRepository,
+                objectMapper
+        );
+
+        UUID sourceId = UUID.randomUUID();
+        UUID targetId = UUID.randomUUID();
+
+        Account sourceAccount = Account.builder()
+                .id(sourceId)
+                .currency("USD")
+                .balance(new BigDecimal("50.00"))
+                .build();
+
+        Account targetAccount = Account.builder()
+                .id(targetId)
+                .currency("USD")
+                .balance(new BigDecimal("20.00"))
+                .build();
+
+        when(idempotencyKeyRepository.tryCreate(
+                eq("PAY-INSUFFICIENT-001"),
+                any(String.class),
+                any(OffsetDateTime.class)
+        )).thenReturn(1);
+
+        when(accountRepository.findByIdForUpdate(sourceId))
+                .thenReturn(Optional.of(sourceAccount));
+        when(accountRepository.findByIdForUpdate(targetId))
+                .thenReturn(Optional.of(targetAccount));
+
+        TransferRequest request = new TransferRequest(
+                sourceId,
+                targetId,
+                new BigDecimal("80.00")
+        );
+
+        assertThrows(
+                InsufficientFundsException.class,
+                () -> service.transfer("PAY-INSUFFICIENT-001", request)
+        );
+
+        assertEquals(new BigDecimal("50.00"), sourceAccount.getBalance());
+        assertEquals(new BigDecimal("20.00"), targetAccount.getBalance());
+
+        verify(transactionRepository, never()).save(any(Transaction.class));
+    }
+
+    @Test
+    void shouldRejectTransferToTheSameAccount() {
+        AccountRepository accountRepository =
+                mock(AccountRepository.class);
+        TransactionRepository transactionRepository =
+                mock(TransactionRepository.class);
+        LedgerEntryRepository ledgerEntryRepository =
+                mock(LedgerEntryRepository.class);
+        IdempotencyKeyRepository idempotencyKeyRepository =
+                mock(IdempotencyKeyRepository.class);
+        ObjectMapper objectMapper = mock(ObjectMapper.class);
+
+        TransferService service = new TransferService(
+                accountRepository,
+                transactionRepository,
+                ledgerEntryRepository,
+                idempotencyKeyRepository,
+                objectMapper
+        );
+
+        UUID accountId = UUID.randomUUID();
+
+        when(idempotencyKeyRepository.tryCreate(
+                eq("PAY-SELF-001"),
+                any(String.class),
+                any(OffsetDateTime.class)
+        )).thenReturn(1);
+
+        TransferRequest request = new TransferRequest(
+                accountId,
+                accountId,
+                new BigDecimal("10.00")
+        );
+
+        assertThrows(
+                InvalidTransferException.class,
+                () -> service.transfer("PAY-SELF-001", request)
+        );
+
+        verify(accountRepository, never()).findByIdForUpdate(any());
+        verify(transactionRepository, never()).save(any(Transaction.class));
+    }
+
 
 
 

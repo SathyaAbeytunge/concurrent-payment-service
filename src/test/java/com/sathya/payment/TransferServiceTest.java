@@ -30,6 +30,10 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.never;
+
+import com.sathya.payment.exception.IdempotencyConflictException;
 
 class TransferServiceTest {
 
@@ -161,6 +165,58 @@ class TransferServiceTest {
 
         assertSame(originalResponse, retryResponse);
     }
+
+    
+    @Test
+    void shouldRejectSameKeyWithDifferentRequest() {
+        AccountRepository accountRepository =
+                mock(AccountRepository.class);
+        TransactionRepository transactionRepository =
+                mock(TransactionRepository.class);
+        LedgerEntryRepository ledgerEntryRepository =
+                mock(LedgerEntryRepository.class);
+        IdempotencyKeyRepository idempotencyKeyRepository =
+                mock(IdempotencyKeyRepository.class);
+        ObjectMapper objectMapper = mock(ObjectMapper.class);
+
+        TransferService service = new TransferService(
+                accountRepository,
+                transactionRepository,
+                ledgerEntryRepository,
+                idempotencyKeyRepository,
+                objectMapper
+        );
+
+        TransferRequest request = new TransferRequest(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                new java.math.BigDecimal("20.00")
+        );
+
+        IdempotencyKey existingKey = IdempotencyKey.builder()
+                .key("PAY-002")
+                .requestHash("different-request-hash")
+                .status(IdempotencyKey.IdempotencyStatus.COMPLETED)
+                .responseBody("saved-response")
+                .build();
+
+        when(idempotencyKeyRepository.tryCreate(
+                eq("PAY-002"),
+                any(String.class),
+                any(OffsetDateTime.class)
+        )).thenReturn(0);
+
+        when(idempotencyKeyRepository.findById("PAY-002"))
+                .thenReturn(Optional.of(existingKey));
+
+        assertThrows(
+                IdempotencyConflictException.class,
+                () -> service.transfer("PAY-002", request)
+        );
+
+        verify(accountRepository, never()).findByIdForUpdate(any());
+    }
+
 
 
 }

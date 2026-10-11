@@ -43,4 +43,35 @@ class TransferServiceTest {
                 exception.getMessage()
         );
     }
+
+    
+    @Test
+    void shouldRejectIdempotencyKeyLongerThan128Characters() {
+        TransferService service = new TransferService(
+                null,
+                null,
+                null,
+                null,
+                null
+        );
+
+        TransferRequest request = new TransferRequest(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                new java.math.BigDecimal("10.00")
+        );
+
+        String longKey = "A".repeat(129);
+
+        InvalidTransferException exception = assertThrows(
+                InvalidTransferException.class,
+                () -> service.transfer(longKey, request)
+        );
+
+        assertEquals(
+                "Idempotency-Key must contain 1 to 128 characters",
+                exception.getMessage()
+        );
+    }
+
 }

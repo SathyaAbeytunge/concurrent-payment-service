@@ -40,6 +40,10 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 
 import com.sathya.payment.exception.IdempotencyConflictException;
+import com.sathya.payment.exception.AccountNotFoundException;
+import com.sathya.payment.exception.InvalidTransferException;
+
+import static org.mockito.Mockito.times;
 
 class TransferServiceTest {
 
@@ -327,6 +331,123 @@ class TransferServiceTest {
         );
 
         verify(accountRepository, never()).findByIdForUpdate(any());
+        verify(transactionRepository, never()).save(any(Transaction.class));
+    }
+
+    
+    @Test
+    void shouldRejectTransferWhenSourceAccountDoesNotExist() {
+        AccountRepository accountRepository =
+                mock(AccountRepository.class);
+        TransactionRepository transactionRepository =
+                mock(TransactionRepository.class);
+        LedgerEntryRepository ledgerEntryRepository =
+                mock(LedgerEntryRepository.class);
+        IdempotencyKeyRepository idempotencyKeyRepository =
+                mock(IdempotencyKeyRepository.class);
+        ObjectMapper objectMapper = mock(ObjectMapper.class);
+
+        TransferService service = new TransferService(
+                accountRepository,
+                transactionRepository,
+                ledgerEntryRepository,
+                idempotencyKeyRepository,
+                objectMapper
+        );
+
+        UUID sourceId = UUID.randomUUID();
+        UUID targetId = UUID.randomUUID();
+
+        when(idempotencyKeyRepository.tryCreate(
+                eq("PAY-MISSING-001"),
+                any(String.class),
+                any(OffsetDateTime.class)
+        )).thenReturn(1);
+
+        when(accountRepository.findByIdForUpdate(sourceId))
+                .thenReturn(Optional.empty());
+
+        TransferRequest request = new TransferRequest(
+                sourceId,
+                targetId,
+                new BigDecimal("10.00")
+        );
+
+        assertThrows(
+                AccountNotFoundException.class,
+                () -> service.transfer("PAY-MISSING-001", request)
+        );
+
+        verify(transactionRepository, never()).save(any(Transaction.class));
+    }
+
+    @Test
+    void shouldRejectTransferWhenCurrenciesDoNotMatch() {
+        AccountRepository accountRepository =
+                mock(AccountRepository.class);
+        TransactionRepository transactionRepository =
+                mock(TransactionRepository.class);
+        LedgerEntryRepository ledgerEntryRepository =
+                mock(LedgerEntryRepository.class);
+        IdempotencyKeyRepository idempotencyKeyRepository =
+                mock(IdempotencyKeyRepository.class);
+        ObjectMapper objectMapper = mock(ObjectMapper.class);
+
+        TransferService service = new TransferService(
+                accountRepository,
+                transactionRepository,
+                ledgerEntryRepository,
+                idempotencyKeyRepository,
+                objectMapper
+        );
+
+        UUID sourceId = UUID.randomUUID();
+        UUID targetId = UUID.randomUUID();
+
+        Account sourceAccount = Account.builder()
+                .id(sourceId)
+                .currency("USD")
+                .balance(new BigDecimal("100.00"))
+                .build();
+
+        Account targetAccount = Account.builder()
+                .id(targetId)
+                .currency("EUR")
+                .balance(new BigDecimal("50.00"))
+                .build();
+
+        when(idempotencyKeyRepository.tryCreate(
+                eq("PAY-CURRENCY-001"),
+                any(String.class),
+                any(OffsetDateTime.class)
+        )).thenReturn(1);
+
+        UUID firstId = sourceId.compareTo(targetId) < 0
+                ? sourceId : targetId;
+        UUID secondId = sourceId.compareTo(targetId) < 0
+                ? targetId : sourceId;
+
+        Account firstAccount = firstId.equals(sourceId)
+                ? sourceAccount : targetAccount;
+        Account secondAccount = secondId.equals(sourceId)
+                ? sourceAccount : targetAccount;
+
+        when(accountRepository.findByIdForUpdate(firstId))
+                .thenReturn(Optional.of(firstAccount));
+        when(accountRepository.findByIdForUpdate(secondId))
+                .thenReturn(Optional.of(secondAccount));
+
+        TransferRequest request = new TransferRequest(
+                sourceId,
+                targetId,
+                new BigDecimal("10.00")
+        );
+
+        assertThrows(
+                InvalidTransferException.class,
+                () -> service.transfer("PAY-CURRENCY-001", request)
+        );
+
         verify(transactionRepository, never()).save(any(Transaction.class));
     }
 

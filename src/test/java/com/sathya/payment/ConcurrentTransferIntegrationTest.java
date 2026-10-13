@@ -67,7 +67,7 @@ class ConcurrentTransferIntegrationTest {
 
                 try {
                     transferService.transfer(
-                            "CONCURRENT-TRANSFER-A",
+                            "CONCURRENT-TRANSFER-A-" + java.util.UUID.randomUUID(),
                             new TransferRequest(
                                     alice.id(),
                                     bob.id(),
@@ -86,7 +86,7 @@ class ConcurrentTransferIntegrationTest {
 
                 try {
                     transferService.transfer(
-                            "CONCURRENT-TRANSFER-B",
+                            "CONCURRENT-TRANSFER-B-" + java.util.UUID.randomUUID(),
                             new TransferRequest(
                                     alice.id(),
                                     charlie.id(),

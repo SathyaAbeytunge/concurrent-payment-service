@@ -20,7 +20,14 @@ public interface IdempotencyKeyRepository
                 (:key, :requestHash,
                  CAST('PROCESSING' AS idempotency_status),
                  :expiresAt)
-            ON CONFLICT (key) DO NOTHING
+            ON CONFLICT (key) DO UPDATE
+            SET request_hash = EXCLUDED.request_hash,
+                status = CAST('PROCESSING' AS idempotency_status),
+                response_code = NULL,
+                response_body = NULL,
+                created_at = clock_timestamp(),
+                expires_at = EXCLUDED.expires_at
+            WHERE idempotency_keys.expires_at <= clock_timestamp()
             """, nativeQuery = true)
     int tryCreate(
             @Param("key") String key,
@@ -28,3 +35,4 @@ public interface IdempotencyKeyRepository
             @Param("expiresAt") OffsetDateTime expiresAt
     );
 }
+

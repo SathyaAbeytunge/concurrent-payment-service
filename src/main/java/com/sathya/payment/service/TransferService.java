@@ -21,6 +21,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -144,7 +146,7 @@ public class TransferService {
             if (existing.getStatus()
                     == IdempotencyKey.IdempotencyStatus.COMPLETED
                     && existing.getResponseBody() != null) {
-                populateRedisCache(idempotencyKey, requestHash, existing.getResponseBody());
+                cacheResponseAfterCommit(idempotencyKey, requestHash, existing.getResponseBody());
                 return readSavedResponse(existing.getResponseBody());
             }
 
@@ -155,6 +157,7 @@ public class TransferService {
 
         // 3. Key successfully claimed: Set in-flight lock in Redis
         setRedisInFlightLock(idempotencyKey, requestHash);
+        registerRedisRollbackCleanup(idempotencyKey);
 
         try {
             // Reject transfers to the same account.
@@ -276,14 +279,42 @@ public class TransferService {
 
             idempotencyKeyRepository.save(savedKey);
 
-            // Cache the completed response in Redis
-            populateRedisCache(idempotencyKey, requestHash, responseBody);
+            // Publish success only once PostgreSQL has committed the transfer.
+            cacheResponseAfterCommit(idempotencyKey, requestHash, responseBody);
 
             return response;
 
         } catch (RuntimeException exception) {
-            releaseRedisLock(idempotencyKey);
+            if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+                releaseRedisLock(idempotencyKey);
+            }
             throw exception;
+        }
+    }
+
+    private void registerRedisRollbackCleanup(String idempotencyKey) {
+        if (redisIdempotencyGateway != null
+                && TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCompletion(int status) {
+                    if (status != STATUS_COMMITTED) {
+                        releaseRedisLock(idempotencyKey);
+                    }
+                }
+            });
+        }
+    }
+
+    private void cacheResponseAfterCommit(String idempotencyKey, String requestHash, String responseBody) {
+        if (redisIdempotencyGateway != null
+                && TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    populateRedisCache(idempotencyKey, requestHash, responseBody);
+                }
+            });
         }
     }
 

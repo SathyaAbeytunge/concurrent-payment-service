@@ -18,6 +18,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionSystemException;
+import org.springframework.transaction.support.AbstractPlatformTransactionManager;
+import org.springframework.transaction.support.DefaultTransactionStatus;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
@@ -36,6 +41,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -59,9 +65,14 @@ class TransferServiceRedisTest {
 
     private ObjectMapper objectMapper;
     private TransferService transferService;
+    private TestTransactionManager transactionManager;
+    private TransactionTemplate transactionTemplate;
 
     @BeforeEach
     void setUp() {
+        transactionManager = new TestTransactionManager();
+        transactionManager.setRollbackOnCommitFailure(true);
+        transactionTemplate = new TransactionTemplate(transactionManager);
         objectMapper = new ObjectMapper();
         transferService = new TransferService(
                 accountRepository,
@@ -142,12 +153,69 @@ class TransferServiceRedisTest {
     }
 
     @Test
-    void shouldCacheCompletedResponse() throws Exception {
+    void shouldCacheCompletedResponseOnlyAfterCommit() throws Exception {
+        String idemKey = "IDEM-REDIS-SUCCESS";
+        TransferRequest request = prepareSuccessfulTransfer(idemKey);
+        String hash = calculateHash(request.sourceAccountId(), request.targetAccountId(), request.amount());
+
+        TransferResponse response = transactionTemplate.execute(status -> {
+            TransferResponse result = transferService.transfer(idemKey, request);
+            verify(redisIdempotencyGateway, never()).set(any(), any(), any());
+            return result;
+        });
+
+        assertNotNull(response);
+        verify(redisIdempotencyGateway).setIfAbsent(eq(idemKey), eq("PROCESSING:" + hash), eq(Duration.ofMinutes(5)));
+        verify(redisIdempotencyGateway).set(eq(idemKey), contains("COMPLETED:" + hash), eq(Duration.ofHours(24)));
+        verify(redisIdempotencyGateway, never()).release(any());
+    }
+
+    @Test
+    void shouldCleanUpWithoutCachingWhenCommitFails() throws Exception {
+        String idemKey = "IDEM-COMMIT-FAIL";
+        TransferRequest request = prepareSuccessfulTransfer(idemKey);
+        transactionManager.failCommit = true;
+
+        assertThrows(TransactionSystemException.class, () -> transactionTemplate.execute(status ->
+                transferService.transfer(idemKey, request)));
+
+        verify(redisIdempotencyGateway, never()).set(any(), any(), any());
+        verify(redisIdempotencyGateway).release(idemKey);
+    }
+
+    @Test
+    void shouldCleanUpWithoutCachingWhenOuterTransactionRollsBack() throws Exception {
+        String idemKey = "IDEM-OUTER-ROLLBACK";
+        TransferRequest request = prepareSuccessfulTransfer(idemKey);
+
+        transactionTemplate.executeWithoutResult(status -> {
+            transferService.transfer(idemKey, request);
+            status.setRollbackOnly();
+            verify(redisIdempotencyGateway, never()).release(any());
+        });
+
+        verify(redisIdempotencyGateway, never()).set(any(), any(), any());
+        verify(redisIdempotencyGateway).release(idemKey);
+    }
+
+    @Test
+    void shouldReturnCommittedResponseWhenRedisCacheWriteFails() throws Exception {
+        String idemKey = "IDEM-CACHE-FAIL";
+        TransferRequest request = prepareSuccessfulTransfer(idemKey);
+        doThrow(new RuntimeException("Redis unavailable"))
+                .when(redisIdempotencyGateway).set(eq(idemKey), any(), any());
+
+        TransferResponse response = transactionTemplate.execute(status -> transferService.transfer(idemKey, request));
+
+        assertNotNull(response);
+        verify(redisIdempotencyGateway, never()).release(any());
+    }
+
+    private TransferRequest prepareSuccessfulTransfer(String idemKey) throws Exception {
         UUID sourceId = UUID.randomUUID();
         UUID targetId = UUID.randomUUID();
         BigDecimal amount = new BigDecimal("10.00");
         String hash = calculateHash(sourceId, targetId, amount);
-        String idemKey = "IDEM-REDIS-SUCCESS";
 
         Account source = Account.builder().id(sourceId).currency("USD").balance(new BigDecimal("100.00")).build();
         Account target = Account.builder().id(targetId).currency("USD").balance(new BigDecimal("50.00")).build();
@@ -161,12 +229,7 @@ class TransferServiceRedisTest {
                 IdempotencyKey.builder().key(idemKey).requestHash(hash).build()
         ));
 
-        TransferRequest request = new TransferRequest(sourceId, targetId, amount);
-        TransferResponse response = transferService.transfer(idemKey, request);
-
-        assertNotNull(response);
-        verify(redisIdempotencyGateway).setIfAbsent(eq(idemKey), eq("PROCESSING:" + hash), eq(Duration.ofMinutes(5)));
-        verify(redisIdempotencyGateway).set(eq(idemKey), contains("COMPLETED:" + hash), eq(Duration.ofHours(24)));
+        return new TransferRequest(sourceId, targetId, amount);
     }
 
     @Test
@@ -186,8 +249,38 @@ class TransferServiceRedisTest {
         when(accountRepository.findByIdForUpdate(targetId)).thenReturn(Optional.of(target));
 
         TransferRequest request = new TransferRequest(sourceId, targetId, amount);
-        assertThrows(InsufficientFundsException.class, () -> transferService.transfer(idemKey, request));
+        assertThrows(InsufficientFundsException.class, () -> transactionTemplate.execute(status -> {
+            try {
+                return transferService.transfer(idemKey, request);
+            } finally {
+                verify(redisIdempotencyGateway, never()).release(any());
+            }
+        }));
 
         verify(redisIdempotencyGateway).release(idemKey);
+    }
+
+    private static class TestTransactionManager extends AbstractPlatformTransactionManager {
+        private boolean failCommit;
+
+        @Override
+        protected Object doGetTransaction() {
+            return new Object();
+        }
+
+        @Override
+        protected void doBegin(Object transaction, TransactionDefinition definition) {
+        }
+
+        @Override
+        protected void doCommit(DefaultTransactionStatus status) {
+            if (failCommit) {
+                throw new TransactionSystemException("Commit failed");
+            }
+        }
+
+        @Override
+        protected void doRollback(DefaultTransactionStatus status) {
+        }
     }
 }

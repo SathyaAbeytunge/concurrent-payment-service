@@ -6,6 +6,7 @@ import com.sathya.payment.dto.DepositRequest;
 import com.sathya.payment.dto.TransferRequest;
 import com.sathya.payment.dto.TransferResponse;
 import com.sathya.payment.entity.IdempotencyKey;
+import com.sathya.payment.gateway.RedisIdempotencyGateway;
 import com.sathya.payment.repository.IdempotencyKeyRepository;
 import com.sathya.payment.repository.TransactionRepository;
 import com.sathya.payment.service.AccountService;
@@ -25,6 +26,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -43,6 +45,9 @@ class IdempotencyFailureRecoveryIntegrationTest {
 
     @Autowired
     private IdempotencyKeyRepository idempotencyKeyRepository;
+
+    @Autowired
+    private RedisIdempotencyGateway redisIdempotencyGateway;
 
     
     @MockitoSpyBean
@@ -102,6 +107,11 @@ class IdempotencyFailureRecoveryIntegrationTest {
                 "The idempotency key must NOT be stuck in PROCESSING after "
                         + "a rolled-back transaction; found: "
                         + stuckKey.map(k -> k.getStatus().name()).orElse("none")
+        );
+
+        assertFalse(
+                redisIdempotencyGateway.exists(idemKey),
+                "A rolled-back transfer must remove its Redis PROCESSING marker"
         );
 
         // 5. Alice's balance must be unchanged — no debit committed.

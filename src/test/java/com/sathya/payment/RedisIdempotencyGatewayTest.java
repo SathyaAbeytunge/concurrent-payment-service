@@ -7,8 +7,11 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.data.redis.core.types.Expiration;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -134,14 +137,32 @@ class RedisIdempotencyGatewayTest {
     }
 
     @Test
-    void buildKeyShouldAvoidDoublePrefixing() {
+    void rawAndPrefixedKeysMustHaveDistinctRedisKeys() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get("idempotency:already-prefixed")).thenReturn("VAL");
+        when(valueOperations.get("idempotency:abc")).thenReturn("FIRST");
+        when(valueOperations.get("idempotency:idempotency:abc")).thenReturn("SECOND");
 
-        String val = gateway.get("idempotency:already-prefixed");
+        assertEquals("FIRST", gateway.get("abc"));
+        assertEquals("SECOND", gateway.get("idempotency:abc"));
 
-        assertEquals("VAL", val);
-        verify(valueOperations).get("idempotency:already-prefixed");
+        gateway.set("abc", "FIRST", Duration.ofMinutes(1));
+        gateway.set("idempotency:abc", "SECOND", Duration.ofMinutes(1));
+        gateway.release("idempotency:abc");
+
+        verify(valueOperations).set("idempotency:abc", "FIRST", Duration.ofMinutes(1));
+        verify(valueOperations).set("idempotency:idempotency:abc", "SECOND", Duration.ofMinutes(1));
+        verify(redisTemplate).delete("idempotency:idempotency:abc");
+    }
+
+    @Test
+    void setUntilMustWriteValueAndAbsoluteExpiryAtomically() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        Instant expiresAt = Instant.parse("2026-11-05T12:00:00.123Z");
+
+        gateway.setUntil("test-key", "COMPLETED", expiresAt);
+
+        verify(valueOperations).set("idempotency:test-key", "COMPLETED",
+                Expiration.unixTimestamp(expiresAt.toEpochMilli(), TimeUnit.MILLISECONDS));
     }
 
     @Test

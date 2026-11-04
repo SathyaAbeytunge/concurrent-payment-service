@@ -28,6 +28,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.HexFormat;
 import java.util.UUID;
@@ -37,7 +38,6 @@ import java.util.UUID;
 public class TransferService {
 
     private static final Duration LOCK_TTL = Duration.ofMinutes(5);
-    private static final Duration RESPONSE_TTL = Duration.ofHours(24);
 
     private final AccountRepository accountRepository;
     private final TransactionRepository transactionRepository;
@@ -146,7 +146,8 @@ public class TransferService {
             if (existing.getStatus()
                     == IdempotencyKey.IdempotencyStatus.COMPLETED
                     && existing.getResponseBody() != null) {
-                cacheResponseAfterCommit(idempotencyKey, requestHash, existing.getResponseBody());
+                cacheResponseAfterCommit(idempotencyKey, requestHash, existing.getResponseBody(),
+                        existing.getExpiresAt().toInstant());
                 return readSavedResponse(existing.getResponseBody());
             }
 
@@ -280,7 +281,8 @@ public class TransferService {
             idempotencyKeyRepository.save(savedKey);
 
             // Publish success only once PostgreSQL has committed the transfer.
-            cacheResponseAfterCommit(idempotencyKey, requestHash, responseBody);
+            cacheResponseAfterCommit(idempotencyKey, requestHash, responseBody,
+                    savedKey.getExpiresAt().toInstant());
 
             return response;
 
@@ -306,13 +308,14 @@ public class TransferService {
         }
     }
 
-    private void cacheResponseAfterCommit(String idempotencyKey, String requestHash, String responseBody) {
+    private void cacheResponseAfterCommit(String idempotencyKey, String requestHash, String responseBody,
+                                          Instant expiresAt) {
         if (redisIdempotencyGateway != null
                 && TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    populateRedisCache(idempotencyKey, requestHash, responseBody);
+                    populateRedisCache(idempotencyKey, requestHash, responseBody, expiresAt);
                 }
             });
         }
@@ -332,13 +335,13 @@ public class TransferService {
         }
     }
 
-    private void populateRedisCache(String idempotencyKey, String requestHash, String responseBody) {
+    private void populateRedisCache(String idempotencyKey, String requestHash, String responseBody, Instant expiresAt) {
         if (redisIdempotencyGateway != null) {
             try {
-                redisIdempotencyGateway.set(
+                redisIdempotencyGateway.setUntil(
                         idempotencyKey,
                         "COMPLETED:" + requestHash + ":" + responseBody,
-                        RESPONSE_TTL
+                        expiresAt
                 );
             } catch (Exception exception) {
                 log.warn("Failed to populate Redis cache: {}", exception.getMessage());

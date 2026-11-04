@@ -150,6 +150,7 @@ class TransferServiceTest {
                 .requestHash(requestHash)
                 .status(IdempotencyKey.IdempotencyStatus.COMPLETED)
                 .responseBody("saved-response")
+                .expiresAt(OffsetDateTime.now().plusHours(24))
                 .build();
 
         when(idempotencyKeyRepository.tryCreate(

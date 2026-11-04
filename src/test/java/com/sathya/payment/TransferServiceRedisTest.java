@@ -63,6 +63,7 @@ class TransferServiceRedisTest {
     @Mock
     private RedisIdempotencyGateway redisIdempotencyGateway;
 
+    private OffsetDateTime keyExpiresAt;
     private ObjectMapper objectMapper;
     private TransferService transferService;
     private TestTransactionManager transactionManager;
@@ -70,6 +71,7 @@ class TransferServiceRedisTest {
 
     @BeforeEach
     void setUp() {
+        keyExpiresAt = OffsetDateTime.now().plusHours(24);
         transactionManager = new TestTransactionManager();
         transactionManager.setRollbackOnCommitFailure(true);
         transactionTemplate = new TransactionTemplate(transactionManager);
@@ -160,14 +162,43 @@ class TransferServiceRedisTest {
 
         TransferResponse response = transactionTemplate.execute(status -> {
             TransferResponse result = transferService.transfer(idemKey, request);
-            verify(redisIdempotencyGateway, never()).set(any(), any(), any());
+            verify(redisIdempotencyGateway, never()).setUntil(any(), any(), any());
             return result;
         });
 
         assertNotNull(response);
         verify(redisIdempotencyGateway).setIfAbsent(eq(idemKey), eq("PROCESSING:" + hash), eq(Duration.ofMinutes(5)));
-        verify(redisIdempotencyGateway).set(eq(idemKey), contains("COMPLETED:" + hash), eq(Duration.ofHours(24)));
+        verify(redisIdempotencyGateway).setUntil(eq(idemKey), contains("COMPLETED:" + hash), eq(keyExpiresAt.toInstant()));
         verify(redisIdempotencyGateway, never()).release(any());
+    }
+
+    @Test
+    void databaseReplayMustPreserveOriginalExpiryWhenRepopulatingRedis() throws Exception {
+        String idemKey = "IDEM-REPOPULATE";
+        UUID sourceId = UUID.randomUUID();
+        UUID targetId = UUID.randomUUID();
+        BigDecimal amount = new BigDecimal("25.00");
+        String hash = calculateHash(sourceId, targetId, amount);
+        TransferResponse original = new TransferResponse(UUID.randomUUID(), sourceId, targetId, amount,
+                "USD", Transaction.TransactionStatus.SUCCESS, OffsetDateTime.now().minusHours(23));
+        String json = objectMapper.writeValueAsString(original);
+        OffsetDateTime originalExpiry = OffsetDateTime.now().plusMinutes(10);
+        when(idempotencyKeyRepository.findById(idemKey)).thenReturn(Optional.of(
+                IdempotencyKey.builder().key(idemKey).requestHash(hash)
+                        .status(IdempotencyKey.IdempotencyStatus.COMPLETED).responseBody(json)
+                        .expiresAt(originalExpiry).build()));
+
+        TransferResponse response = transactionTemplate.execute(status -> {
+            TransferResponse result = transferService.transfer(idemKey, new TransferRequest(sourceId, targetId, amount));
+            verify(redisIdempotencyGateway, never()).setUntil(any(), any(), any());
+            return result;
+        });
+
+        assertEquals(original.transactionId(), response.transactionId());
+        verify(redisIdempotencyGateway).setUntil(idemKey, "COMPLETED:" + hash + ":" + json,
+                originalExpiry.toInstant());
+        verify(accountRepository, never()).findByIdForUpdate(any());
+        verify(transactionRepository, never()).save(any());
     }
 
     @Test
@@ -179,7 +210,7 @@ class TransferServiceRedisTest {
         assertThrows(TransactionSystemException.class, () -> transactionTemplate.execute(status ->
                 transferService.transfer(idemKey, request)));
 
-        verify(redisIdempotencyGateway, never()).set(any(), any(), any());
+        verify(redisIdempotencyGateway, never()).setUntil(any(), any(), any());
         verify(redisIdempotencyGateway).release(idemKey);
     }
 
@@ -194,7 +225,7 @@ class TransferServiceRedisTest {
             verify(redisIdempotencyGateway, never()).release(any());
         });
 
-        verify(redisIdempotencyGateway, never()).set(any(), any(), any());
+        verify(redisIdempotencyGateway, never()).setUntil(any(), any(), any());
         verify(redisIdempotencyGateway).release(idemKey);
     }
 
@@ -203,7 +234,7 @@ class TransferServiceRedisTest {
         String idemKey = "IDEM-CACHE-FAIL";
         TransferRequest request = prepareSuccessfulTransfer(idemKey);
         doThrow(new RuntimeException("Redis unavailable"))
-                .when(redisIdempotencyGateway).set(eq(idemKey), any(), any());
+                .when(redisIdempotencyGateway).setUntil(eq(idemKey), any(), any());
 
         TransferResponse response = transactionTemplate.execute(status -> transferService.transfer(idemKey, request));
 
@@ -226,7 +257,7 @@ class TransferServiceRedisTest {
         when(accountRepository.findByIdForUpdate(targetId)).thenReturn(Optional.of(target));
         when(transactionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         when(idempotencyKeyRepository.findById(idemKey)).thenReturn(Optional.of(
-                IdempotencyKey.builder().key(idemKey).requestHash(hash).build()
+                IdempotencyKey.builder().key(idemKey).requestHash(hash).expiresAt(keyExpiresAt).build()
         ));
 
         return new TransferRequest(sourceId, targetId, amount);

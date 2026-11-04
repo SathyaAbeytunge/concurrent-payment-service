@@ -6,6 +6,7 @@ import com.sathya.payment.dto.CreateAccountRequest;
 import com.sathya.payment.dto.DepositRequest;
 import com.sathya.payment.dto.TransferRequest;
 import com.sathya.payment.dto.TransferResponse;
+import com.sathya.payment.gateway.RedisIdempotencyGateway;
 import com.sathya.payment.service.AccountService;
 import com.sathya.payment.service.TransferService;
 
@@ -16,9 +17,12 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.math.BigDecimal;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @SpringBootTest
 class IdempotencyExpiryIntegrationTest {
@@ -32,8 +36,11 @@ class IdempotencyExpiryIntegrationTest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private RedisIdempotencyGateway redisIdempotencyGateway;
+
     @Test
-    void expiredIdempotencyKeyShouldBeReusable() {
+    void expiredIdempotencyKeyShouldBeReusable() throws Exception {
 
         String suffix = UUID.randomUUID().toString();
 
@@ -92,17 +99,42 @@ class IdempotencyExpiryIntegrationTest {
                 "Alice should not be charged twice"
         );
 
-        // 5. Simulate expiry by moving the expiry time into the past.
+        // 5. Shorten the database retention window, then evict and repopulate
+        // the cache. The replay must preserve this deadline, not add 24 hours.
         int updated = jdbcTemplate.update(
                 """
                 UPDATE idempotency_keys
-                SET expires_at = clock_timestamp() - INTERVAL '1 second'
+                SET expires_at = clock_timestamp() + INTERVAL '3 seconds'
                 WHERE key = ?
                 """,
                 key
         );
 
         assertEquals(1, updated, "The idempotency key should exist");
+
+        redisIdempotencyGateway.delete(key);
+        TransferResponse databaseReplay = transferService.transfer(key,
+                new TransferRequest(alice.id(), bob.id(), new BigDecimal("10")));
+        assertEquals(firstResponse.transactionId(), databaseReplay.transactionId());
+        Long remainingSeconds = redisIdempotencyGateway.getExpire(key);
+        assertTrue(remainingSeconds != null && remainingSeconds >= 0 && remainingSeconds <= 3,
+                "Repopulating Redis must use the remaining database lifetime");
+
+        // Let both deadlines pass naturally: do not delete the cached result.
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (System.nanoTime() < deadline) {
+            boolean databaseExpired = Boolean.TRUE.equals(jdbcTemplate.queryForObject(
+                    "SELECT expires_at <= clock_timestamp() FROM idempotency_keys WHERE key = ?",
+                    Boolean.class, key));
+            if (databaseExpired && !redisIdempotencyGateway.exists(key)) {
+                break;
+            }
+            Thread.sleep(25);
+        }
+        assertTrue(Boolean.TRUE.equals(jdbcTemplate.queryForObject(
+                "SELECT expires_at <= clock_timestamp() FROM idempotency_keys WHERE key = ?",
+                Boolean.class, key)));
+        assertFalse(redisIdempotencyGateway.exists(key), "Redis must expire with the database key");
 
         // 6. Reuse the expired key for a different transfer.
         // This time Alice sends $15 to Charlie.

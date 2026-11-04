@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -18,6 +19,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @SpringBootTest
@@ -47,6 +49,32 @@ class RedisIdempotencyIntegrationTest {
         }
 
         assertNull(gateway.get(key), "Redis must remove the key when its TTL expires");
+    }
+
+    @Test
+    void rawAndPrefixedKeysMustRemainIndependentInRealRedis() {
+        String rawKey = newKey("prefix");
+        String prefixedKey = "idempotency:" + rawKey;
+        keysToDelete.add(prefixedKey);
+
+        assertTrue(gateway.setIfAbsent(rawKey, "FIRST", Duration.ofMinutes(1)));
+        assertTrue(gateway.setIfAbsent(prefixedKey, "SECOND", Duration.ofMinutes(1)));
+        assertEquals("FIRST", gateway.get(rawKey));
+        assertEquals("SECOND", gateway.get(prefixedKey));
+        gateway.release(rawKey);
+        assertNull(gateway.get(rawKey));
+        assertEquals("SECOND", gateway.get(prefixedKey));
+    }
+
+    @Test
+    void absoluteExpiryInThePastMustRemoveProcessingMarker() {
+        String key = newKey("expired-at-commit");
+        gateway.set(key, "PROCESSING", Duration.ofMinutes(5));
+
+        gateway.setUntil(key, "COMPLETED", Instant.now().minusSeconds(1));
+
+        assertNull(gateway.get(key));
+        assertFalse(gateway.exists(key));
     }
 
     @Test

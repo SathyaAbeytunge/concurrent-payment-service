@@ -35,6 +35,10 @@ public class AccountController {
     }
 
     
+    /**
+     * Adds demo funds for examples and tests. Creates no transaction or ledger
+     * entries; repeated requests each increase the balance again.
+     */
     @PostMapping("/{accountId}/deposit")
     public AccountResponse deposit(
         @PathVariable UUID accountId,

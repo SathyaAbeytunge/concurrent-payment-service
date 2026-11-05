@@ -7,6 +7,7 @@ import jakarta.validation.constraints.NotNull;
 
 import java.math.BigDecimal;
 
+/** Amount of demo funding to add directly to an account, outside the transfer ledger. */
 public record DepositRequest(
 
         @NotNull(message = "amount is required")

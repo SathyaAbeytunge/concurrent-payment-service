@@ -59,6 +59,11 @@ public class AccountService {
     }
 
 
+    /**
+     * Seeds an account with demo funds outside the transfer ledger.
+     * Funding is not recorded in ledger entries, so the transfer ledger alone
+     * cannot reconstruct account balances. This operation is not idempotent.
+     */
     @Transactional
     public AccountResponse deposit(UUID accountId, DepositRequest request) {
 

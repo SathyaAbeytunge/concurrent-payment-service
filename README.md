@@ -135,6 +135,7 @@ new intended transfer.
 | --- | --- | --- |
 | POST | `/accounts` | Create an account |
 | GET | `/accounts/{accountId}` | Get an account and its current balance |
+| GET | `/accounts/{accountId}/ledger` | Get the account's transfer history, newest first |
 | POST | `/accounts/{accountId}/deposit` | Add demo funds |
 | POST | `/transfers` | Transfer funds; requires `Idempotency-Key` |
 
@@ -144,6 +145,24 @@ HTTP `400 Bad Request` rather than being rounded.
 
 Transfers also require two different, existing accounts, matching currencies,
 and enough money in the source account.
+
+### Read an account's transfer history
+
+After the transfer example above, you can read Alice's and Bob's ledger entries:
+
+```powershell
+Invoke-RestMethod -Uri "$baseUrl/accounts/$($alice.id)/ledger"
+Invoke-RestMethod -Uri "$baseUrl/accounts/$($bob.id)/ledger"
+```
+
+Each entry contains `id`, `transactionId`, `type` (`DEBIT` or `CREDIT`), `amount`,
+`balanceAfter`, and `createdAt`. Entries are returned as a JSON array with the
+newest transfers first. The endpoint returns all entries for that account;
+pagination is not yet supported.
+
+An existing account with no transfers returns an empty array (`[]`), even if it
+has demo funds. An unknown account returns HTTP `404 Not Found`. Retrying a
+successful transfer with its original idempotency key does not add history entries.
 
 ## What the ledger records
 

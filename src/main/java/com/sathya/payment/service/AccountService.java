@@ -2,15 +2,18 @@ package com.sathya.payment.service;
 
 import com.sathya.payment.dto.AccountResponse;
 import com.sathya.payment.dto.CreateAccountRequest;
+import com.sathya.payment.dto.LedgerEntryResponse;
 import com.sathya.payment.entity.Account;
 import com.sathya.payment.exception.AccountNotFoundException;
 import com.sathya.payment.repository.AccountRepository;
+import com.sathya.payment.repository.LedgerEntryRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 
 import com.sathya.payment.dto.DepositRequest;
@@ -21,6 +24,7 @@ import com.sathya.payment.exception.InvalidTransferException;
 public class AccountService {
 
     private final AccountRepository accountRepository;
+    private final LedgerEntryRepository ledgerEntryRepository;
 
     @Transactional
     public AccountResponse createAccount(CreateAccountRequest request) {
@@ -45,6 +49,25 @@ public class AccountService {
                 .orElseThrow(() -> new AccountNotFoundException(accountId));
 
         return toResponse(account);
+    }
+
+    /** Returns transfer entries only; demo funding is not recorded in the ledger. */
+    @Transactional(readOnly = true)
+    public List<LedgerEntryResponse> getLedgerHistory(UUID accountId) {
+        if (!accountRepository.existsById(accountId)) {
+            throw new AccountNotFoundException(accountId);
+        }
+
+        return ledgerEntryRepository.findByAccountIdOrderByCreatedAtDesc(accountId).stream()
+                .map(entry -> new LedgerEntryResponse(
+                        entry.getId(),
+                        entry.getTransaction().getId(),
+                        entry.getType(),
+                        entry.getAmount(),
+                        entry.getBalanceAfter(),
+                        entry.getCreatedAt()
+                ))
+                .toList();
     }
 
     private AccountResponse toResponse(Account account) {

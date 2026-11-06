@@ -3,6 +3,7 @@ package com.sathya.payment.controller;
 
 import com.sathya.payment.dto.AccountResponse;
 import com.sathya.payment.dto.CreateAccountRequest;
+import com.sathya.payment.dto.LedgerEntryResponse;
 import com.sathya.payment.service.AccountService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -10,6 +11,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
+import java.util.List;
 import com.sathya.payment.dto.DepositRequest;
 
 @RestController
@@ -35,6 +37,11 @@ public class AccountController {
     }
 
     
+    @GetMapping("/{accountId}/ledger")
+    public List<LedgerEntryResponse> getLedgerHistory(@PathVariable UUID accountId) {
+        return accountService.getLedgerHistory(accountId);
+    }
+
     /**
      * Adds demo funds for examples and tests. Creates no transaction or ledger
      * entries; repeated requests each increase the balance again.

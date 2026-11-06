@@ -5,6 +5,7 @@ import com.sathya.payment.dto.CreateAccountRequest;
 import com.sathya.payment.dto.DepositRequest;
 import com.sathya.payment.dto.TransferRequest;
 import com.sathya.payment.dto.TransferResponse;
+import com.sathya.payment.exception.IdempotencyConflictException;
 import com.sathya.payment.service.AccountService;
 import com.sathya.payment.service.TransferService;
 
@@ -13,6 +14,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
 import java.math.BigDecimal;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -69,18 +71,18 @@ class ConcurrentIdempotencyIntegrationTest {
         ExecutorService executor = Executors.newFixedThreadPool(2);
 
         try {
-            Future<TransferResponse> transferA = executor.submit(() -> {
+            Future<Optional<TransferResponse>> transferA = executor.submit(() -> {
                 ready.countDown();
-                start.await();
+                assertTrue(start.await(10, TimeUnit.SECONDS), "Requests should be released to start");
 
-                return transferService.transfer(idempotencyKey, request);
+                return attemptTransfer(idempotencyKey, request);
             });
 
-            Future<TransferResponse> transferB = executor.submit(() -> {
+            Future<Optional<TransferResponse>> transferB = executor.submit(() -> {
                 ready.countDown();
-                start.await();
+                assertTrue(start.await(10, TimeUnit.SECONDS), "Requests should be released to start");
 
-                return transferService.transfer(idempotencyKey, request);
+                return attemptTransfer(idempotencyKey, request);
             });
 
             // Wait until both threads are ready.
@@ -92,21 +94,25 @@ class ConcurrentIdempotencyIntegrationTest {
             // Let both requests start.
             start.countDown();
 
-            TransferResponse responseA =
+            Optional<TransferResponse> responseA =
                     transferA.get(30, TimeUnit.SECONDS);
 
-            TransferResponse responseB =
+            Optional<TransferResponse> responseB =
                     transferB.get(30, TimeUnit.SECONDS);
 
-            // 4. Both requests must return the same transaction.
-            assertNotNull(responseA);
-            assertNotNull(responseB);
+            // 4. A duplicate can see Redis's PROCESSING marker and be rejected,
+            // or reach PostgreSQL and wait for the original result. Either is valid.
+            assertTrue(responseA.isPresent() || responseB.isPresent(),
+                    "At least one concurrent request must complete successfully");
+            TransferResponse completed = responseA.or(() -> responseB).orElseThrow();
+            assertNotNull(completed.transactionId());
+            responseA.ifPresent(response -> assertEquals(completed.transactionId(), response.transactionId()));
+            responseB.ifPresent(response -> assertEquals(completed.transactionId(), response.transactionId()));
 
-            assertEquals(
-                    responseA.transactionId(),
-                    responseB.transactionId(),
-                    "Both requests should return the same transaction ID"
-            );
+            // Both attempts have finished, so a retry must now replay the winner.
+            TransferResponse retry = transferService.transfer(idempotencyKey, request);
+            assertEquals(completed.transactionId(), retry.transactionId(),
+                    "Retrying after completion must return the original transaction");
 
             // 5. The transfer must happen only once.
             AccountResponse updatedAlice =
@@ -128,7 +134,18 @@ class ConcurrentIdempotencyIntegrationTest {
             );
 
         } finally {
+            start.countDown();
             executor.shutdownNow();
+        }
+    }
+
+    private Optional<TransferResponse> attemptTransfer(String idempotencyKey, TransferRequest request) {
+        try {
+            return Optional.of(transferService.transfer(idempotencyKey, request));
+        } catch (IdempotencyConflictException exception) {
+            assertEquals("This idempotency key has no completed result", exception.getMessage(),
+                    "Only an in-flight conflict is an acceptable concurrent outcome");
+            return Optional.empty();
         }
     }
 }

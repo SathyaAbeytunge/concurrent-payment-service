@@ -193,6 +193,70 @@ To run only the tests that do not need PostgreSQL or Redis:
 Integration tests use the configured local database and Redis instance and
 create test data there. Use a local development environment when running them.
 
+## Continuous integration (CI)
+
+CI is an automatic check of the project when code changes. This project uses
+GitHub Actions, with the recipe stored in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+```text
+Push code or open a pull request
+    -> Set up Java, PostgreSQL, and Redis
+    -> Build the project and run all tests
+    -> Save test reports and the application JAR
+```
+
+The workflow runs on every push and when a pull request is opened, updated, or
+reopened. You can also start it manually from GitHub's **Actions** tab.
+
+### What the workflow file means
+
+| Setting | Simple explanation |
+| --- | --- |
+| `on` | The events that start the workflow |
+| `jobs` | The work GitHub should carry out |
+| `runs-on` | The machine that does the work; this project uses Ubuntu |
+| `services` | Temporary PostgreSQL and Redis containers used by the tests |
+| `steps` | Instructions carried out in order |
+| `uses` | A ready-made action, such as setting up Java |
+| `run` | A terminal command to execute |
+
+Health checks wait for PostgreSQL and Redis to be ready before the steps begin.
+The service connection settings match the local configuration, so the tests
+need no separate CI settings. The database password in the workflow is only for
+its temporary test database; you do not need to create a GitHub secret for it.
+
+The main command is:
+
+```sh
+sh ./mvnw --batch-mode --no-transfer-progress clean verify
+```
+
+`clean` removes old build output. `verify` compiles the code, runs all unit and
+integration tests, and builds the executable JAR. The other options make the
+command suitable for automation and keep download output short. Maven's
+downloaded dependencies are cached to speed up later runs.
+
+If a test fails, the build fails and GitHub marks the job with a red cross.
+Test reports are uploaded even after a failure, if they were produced. The JAR
+is uploaded only after a successful build. These downloadable files are called
+**artifacts**, and this workflow keeps them for seven days.
+
+### See your first CI run
+
+1. Commit and push the workflow and README changes to GitHub.
+2. Open the repository's **Actions** tab and select **CI**.
+3. Open the latest run, then **Build and test**, to watch the steps.
+4. A green check means the job passed. If it fails, open the failed step to read
+   its error, fix the problem locally, and push the fix.
+5. On the run's summary page, download `test-reports` or `payment-service-jar`
+   from **Artifacts** when available.
+
+After the workflow is on the default branch, you can also select **CI** and
+choose **Run workflow** to start it manually.
+
+CI builds and checks the application. Deployment to a running environment is a
+separate step called CD, which this workflow does not yet perform.
+
 ## Stop the application
 
 Press `Ctrl+C` in the application terminal. To stop the supporting containers:

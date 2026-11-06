@@ -1,0 +1,79 @@
+name: CI
+
+# Run automatically for code changes, or manually from the Actions tab.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Temporary services for this job. These match the local development setup.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: paymentdb
+          POSTGRES_USER: paymentuser
+          POSTGRES_PASSWORD: paymentpass
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U paymentuser -d paymentdb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # sh runs the Linux wrapper even when it has no executable permission.
+      # verify compiles the project, runs all tests, and packages the application.
+      - name: Build and run all tests
+        run: sh ./mvnw --batch-mode --no-transfer-progress clean verify
+
+      # Reports are especially useful when a test fails.
+      - name: Save test reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports
+          path: target/surefire-reports/
+          if-no-files-found: warn
+          retention-days: 7
+
+      # This step runs only if all earlier steps succeeded.
+      - name: Save application JAR
+        uses: actions/upload-artifact@v7
+        with:
+          name: payment-service-jar
+          path: target/*.jar
+          if-no-files-found: error
+          retention-days: 7

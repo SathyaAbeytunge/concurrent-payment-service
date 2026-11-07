@@ -1,0 +1,33 @@
+# Create this Blueprint after the branch has been merged into main.
+services:
+  - type: web
+    name: concurrent-payment-service
+    runtime: docker
+    plan: free
+    region: singapore
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /actuator/health
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: SPRING_PROFILES_ACTIVE
+        value: render
+      - key: DB_JDBC_URL
+        sync: false
+      - key: DB_USERNAME
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: payment-cache
+          property: connectionString
+
+  - type: keyvalue
+    name: payment-cache
+    plan: free
+    region: singapore
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []

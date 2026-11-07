@@ -17,14 +17,14 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /** Exercises the hosted schema configuration against the local test services. */
-@ActiveProfiles("render")
+@ActiveProfiles("cloud")
 @SpringBootTest(properties = {
         "DB_JDBC_URL=jdbc:postgresql://localhost:5433/paymentdb",
         "DB_USERNAME=paymentuser",
         "DB_PASSWORD=paymentpass",
         "REDIS_URL=redis://localhost:6379"
 })
-class RenderProfileIntegrationTest {
+class CloudProfileIntegrationTest {
 
     @Autowired
     private AccountService accountService;
@@ -39,11 +39,11 @@ class RenderProfileIntegrationTest {
     void hostedProfileShouldMigrateAndTransferWithinItsOwnSchema() {
         assertEquals("payments", jdbcTemplate.queryForObject("SELECT current_schema()", String.class));
         String suffix = UUID.randomUUID().toString();
-        var alice = accountService.createAccount(new CreateAccountRequest("render-alice-" + suffix, "USD"));
-        var bob = accountService.createAccount(new CreateAccountRequest("render-bob-" + suffix, "USD"));
+        var alice = accountService.createAccount(new CreateAccountRequest("cloud-alice-" + suffix, "USD"));
+        var bob = accountService.createAccount(new CreateAccountRequest("cloud-bob-" + suffix, "USD"));
         accountService.deposit(alice.id(), new DepositRequest(new BigDecimal("100")));
 
-        String key = "render-transfer-" + suffix;
+        String key = "cloud-transfer-" + suffix;
         var request = new TransferRequest(alice.id(), bob.id(), new BigDecimal("10"));
         var first = transferService.transfer(key, request);
         var retry = transferService.transfer(key, request);

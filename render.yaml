@@ -1,3 +1,5 @@
+# Optional Render alternative. The primary deployment guide now uses Railway.
+# Render may require payment-card verification even for Free resources.
 # Create this Blueprint after the branch has been merged into main.
 services:
   - type: web

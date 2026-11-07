@@ -1,169 +1,192 @@
-# Deploy the demo: Render + Supabase
+﻿# Deploy the demo: Railway + Supabase + Upstash
 
-This setup uses three services:
+This is the current deployment path. Render required a payment card for this
+account, so the application now uses Railway's trial instead.
 
-| Service | Host | What it does |
+| Component | Provider | Purpose |
 | --- | --- | --- |
-| Spring Boot application | Render Free Web Service | Runs the Java API |
-| PostgreSQL | Supabase Free | Stores accounts, transfers, and ledger entries |
-| Redis-compatible cache | Render Free Key Value | Caches transfer results |
+| Spring Boot application | Railway Trial | Runs the Java API |
+| PostgreSQL | Existing Supabase Free project | Stores accounts, transfers, and ledger entries |
+| Redis | Upstash Free | Caches completed transfer results |
 
-Choose the Free plan for each service. Free plans have usage limits: Render's
-web service sleeps after inactivity, its free cache can lose data on restart,
-and inactive Supabase free projects can pause. PostgreSQL remains the source of
-truth when cached results are lost. Check the providers' plan screens before
-creating services; this repository does not create a paid service.
+Railway's trial is a limited credit allowance, not guaranteed ongoing free
+hosting. Watch the Usage page and stop or delete the demo service when you no
+longer need it. Use the limits shown in your own Railway dashboard; this image
+has been tested with a 512 MB memory limit. Upstash's Free databases do not
+require a card. Select Free when creating the cache and do not enable a paid plan.
 
-This is a public learning demo with no authentication. Use fictional users and
-demo balances only. Anyone who can reach the API can call its endpoints.
+This public learning API has no authentication. Use fictional users and demo
+balances only.
 
-## 1. Understand the new files
+## 1. Push and merge the Railway changes
 
-- `Dockerfile` builds the application and packages it with Java 21. The final
-  container runs as a non-root user, with memory settings for a small instance.
-- `.dockerignore` sends only the build inputs to Docker, excluding Git history,
-  local settings, build output, and credential files.
-- `compose.app.yml` adds the application to the local PostgreSQL and Redis setup.
-- `application-render.properties` reads hosted connection details from environment
-  variables and uses the port assigned by Render.
-- `render.yaml` is a Blueprint: instructions for creating the two Render services.
+The `cloud` profile reads hosted connection settings from environment variables.
+Your local `application.properties` stays unchanged. The Dockerfile is already
+suitable for Railway and is detected automatically.
 
-## 2. Run the container locally
+```powershell
+git add README.md docs/DEPLOYMENT.md render.yaml src/main/resources src/test/java/com/sathya/payment
+git commit -m "Adapt deployment for Railway and Upstash"
+git push -u origin feature/railway-deployment
+```
 
-Stop any application already using port 8080. With Docker running, execute:
+Open a pull request into `main`, wait for CI to pass, review, and merge. Railway
+will deploy `main`, so merge the configuration before creating the service.
+
+## 2. Keep the Supabase project you already created
+
+In Supabase, open **Connect > Session pooler**. Keep the host, database name,
+username, and your database password ready. Session mode uses port `5432` and
+supports IPv4 connections from this Java server.
+
+Prepare:
+
+| Variable | Value |
+| --- | --- |
+| `DB_JDBC_URL` | `jdbc:postgresql://<session-pooler-host>:5432/postgres?sslmode=require` |
+| `DB_USERNAME` | The exact session-pooler username, commonly `postgres.<project-ref>` |
+| `DB_PASSWORD` | Your project's database password, not a Supabase API key |
+
+Use the displayed database name if it differs from `postgres`. Keep the password
+separate from the JDBC URL so it does not need URL encoding. Enter these values
+only in Railway's Variables screen, not in source files, Git, or chat.
+
+Flyway creates the application's tables in a dedicated `payments` schema on
+startup. You do not need to create the tables manually. Keep `payments` out of
+Supabase's Data API exposed schemas: the application uses JDBC directly.
+
+See [Supabase connection options](https://supabase.com/docs/guides/database/connecting-to-postgres).
+
+## 3. Create the free Upstash Redis database
+
+1. Open <https://console.upstash.com/> and sign in.
+2. Create a Redis database named `payment-cache`.
+3. Choose the **Free** plan and a region close to your Railway service and
+   Supabase project, such as Singapore where available.
+4. Open the database's connection panel and find the Redis TCP connection
+   details: endpoint, port, username, and password.
+5. Copy its TLS Redis URL if provided. Its format is:
+
+```text
+rediss://default:<redis-password>@<redis-endpoint>:<redis-port>
+```
+
+Use the actual username and port shown in Upstash. The two `s` characters in
+`rediss://` enable TLS. If the panel gives a `redis://` URL with a separate
+`--tls` option, use the same credentials and endpoint with `rediss://` for this
+application. If you assemble a URL and its username or password contains special
+characters, percent-encode those credential components.
+
+This complete Redis URL becomes the `REDIS_URL` variable in Railway. It contains
+a password, so treat it as a secret. Do not use an `https://` REST URL or a REST
+token: this application uses Spring's Redis TCP client, not Upstash's REST SDK.
+No extra Java library or npm package is needed.
+
+See [connecting Redis clients to Upstash](https://upstash.com/docs/redis/howto/connect-client).
+
+## 4. Create the Railway application service
+
+1. In Railway, choose **New Project > Deploy from GitHub repo** (or the matching
+   GitHub repository deployment option).
+2. Connect GitHub and select `concurrent-payment-service`.
+3. Select `main` as the source branch.
+4. Railway detects the root `Dockerfile`. Keep the build using that Dockerfile.
+5. Open the application's **Variables** tab and add the values below.
+
+| Name | Value |
+| --- | --- |
+| `SPRING_PROFILES_ACTIVE` | `cloud` |
+| `PORT` | `8080` |
+| `DB_JDBC_URL` | Your Supabase JDBC URL from step 2 |
+| `DB_USERNAME` | Your Supabase session-pooler username |
+| `DB_PASSWORD` | Your Supabase database password |
+| `REDIS_URL` | Your Upstash TLS Redis URL from step 3 |
+
+An initial deployment might start before you have entered the variables and
+fail. Add all six variables, apply the staged changes, and redeploy. The
+Dockerfile already defines how to build and start Java, so no custom start
+command or database service is needed in Railway.
+
+## 5. Configure health checks and automatic deployment
+
+In the application's service settings:
+
+1. Set the healthcheck path to `/actuator/health`.
+2. If a healthcheck timeout is offered, use `300` seconds to allow cold startup.
+3. Enable **Wait for CI** in the GitHub source/autodeploy settings. Accept updated
+   GitHub permissions if Railway requests them for this integration.
+4. Confirm the linked branch is `main` and automatic deployments are enabled.
+5. Apply the settings and deploy the latest `main` commit.
+
+The CI workflow already runs on pushes to `main`. With Wait for CI enabled,
+Railway waits for GitHub Actions to finish successfully before deploying the
+commit. A failed check skips that deployment.
+
+See [Railway Dockerfiles](https://docs.railway.com/builds/dockerfiles) and
+[Wait for CI](https://docs.railway.com/deployments/github-autodeploys).
+
+## 6. Generate a public URL and verify
+
+1. Read the service's deployment logs until the application starts successfully.
+2. Open **Settings > Networking > Public Networking** and choose **Generate Domain**.
+3. If asked for a target port, use `8080`, matching the `PORT` variable.
+4. Open the generated HTTPS URL with `/actuator/health` appended:
+
+```text
+https://<your-service>.up.railway.app/actuator/health
+```
+
+Expect `{"status":"UP"}`. A 404 at the plain `/` path is normal: this project is
+an API and has no homepage.
+
+Set `$baseUrl` in the README's PowerShell examples to your Railway URL. Create
+two accounts, fund one, transfer money, replay the same request with the same
+idempotency key, and read `/accounts/{accountId}/ledger`. A replay should return
+the original transaction ID and leave the balances unchanged.
+
+Health requires PostgreSQL. Redis is excluded from health status because a
+cache outage should fall back to the database rather than make the whole API
+unavailable. Check the logs for Redis connection warnings even when health is UP;
+an incorrect Redis URL can otherwise be masked by the database fallback.
+
+## 7. The CD cycle after setup
+
+```text
+Create a branch -> Push -> CI runs -> Review and merge
+    -> CI runs on main -> Wait for CI succeeds -> Railway deploys
+    -> Health check passes -> The new version receives traffic
+```
+
+No Railway token is needed in GitHub when using the GitHub integration and
+Wait for CI. Railway rebuilds the checked commit using the Dockerfile; GitHub's
+Docker step validates the image build but does not publish an image.
+
+## Run locally
+
+With Docker running:
 
 ```powershell
 docker compose -f docker-compose.yml -f compose.app.yml up --build -d
-docker compose -f docker-compose.yml -f compose.app.yml logs -f app
 ```
 
-Once Spring Boot has started, open:
-
-```text
-http://localhost:8080/actuator/health
-```
-
-It should return `{"status":"UP"}`. You can also use the account and transfer
-examples in the README against this container. This local command uses your
-local database, not Supabase.
-
-To stop the containers without deleting data:
+This uses the local PostgreSQL and Redis services and does not spend Railway
+credits. To stop them:
 
 ```powershell
 docker compose -f docker-compose.yml -f compose.app.yml stop
 ```
 
-## 3. Push, review, and merge this branch
-
-Push the deployment changes and open a pull request into `main`. CI now runs the
-full test suite and checks that the Docker image builds. Merge only after CI
-passes. If your account-ledger feature has a separate open pull request, merge
-that first: the deployment branch was created from it.
-
-The Blueprint deploys `main`, so merge these files before connecting Render.
-
-## 4. Create the Supabase database
-
-1. Sign up at <https://supabase.com/> and create a **Free** project dedicated to
-   this demo. Choose a region close to Singapore, where the Render services run.
-2. Choose a database password and keep it in your password manager.
-3. Once the project is ready, select **Connect** and choose **Session pooler**.
-   Use session mode on port `5432`, not transaction mode on port `6543`.
-4. Copy the host, database name, and username shown in that panel. The username
-   commonly looks like `postgres.<project-reference>`; use the exact value shown.
-
-The session pooler supports IPv4 connections from a persistent application.
-The direct connection may require IPv6, depending on your plan and settings.
-See [Supabase connection options](https://supabase.com/docs/guides/database/connecting-to-postgres).
-
-Prepare these values for Render:
-
-| Variable | Value |
-| --- | --- |
-| `DB_JDBC_URL` | `jdbc:postgresql://<session-pooler-host>:5432/postgres?sslmode=require` |
-| `DB_USERNAME` | The session-pooler username from Supabase |
-| `DB_PASSWORD` | Your database password |
-
-Use the actual database name if it differs from `postgres`. The URL must start
-with `jdbc:postgresql://`, not just `postgresql://`. Keep the password separate
-from the URL. These are database credentials, not Supabase's public API key.
-
-Do not paste credentials into Git, pull requests, CI logs, or chat. Render will
-prompt for them in the next step.
-
-### Where the application tables go
-
-On first startup, Flyway creates a dedicated `payments` schema and runs the
-existing migration there. The Render profile uses that schema for database
-queries. No SQL needs to be pasted into Supabase's SQL editor.
-
-Keep `payments` out of Supabase's Data API exposed schemas. The Spring Boot API
-connects directly through JDBC and does not need the Supabase Data API. In the
-SQL editor or table browser, select `payments` to inspect the application tables.
-
-## 5. Create the Render services
-
-1. Sign up at <https://render.com/> and connect your GitHub account.
-2. In the dashboard, choose **New > Blueprint** and select this repository.
-3. Use branch `main` and the root `render.yaml` file.
-4. Review the resources: `concurrent-payment-service` and `payment-cache` must
-   both show the **Free** plan and the same region.
-5. Enter `DB_JDBC_URL`, `DB_USERNAME`, and `DB_PASSWORD` when prompted.
-6. Create the Blueprint. Render creates the cache, builds the Docker image,
-   and starts the application.
-
-The Blueprint automatically sets `SPRING_PROFILES_ACTIVE=render` and connects
-`REDIS_URL` to the cache's private connection URL. You do not need a Redis secret
-in GitHub. The empty cache IP allowlist blocks external connections; the web
-service connects over Render's private network.
-
-If these service names already belong to another app in your Render workspace,
-rename both services in the Blueprint and update the cache reference before
-creating it.
-
-## 6. Verify the first deployment
-
-Open the web service in Render and read its deployment logs. After it becomes
-healthy, open the service's public URL with `/actuator/health` appended:
-
-```text
-https://<your-service>.onrender.com/actuator/health
-```
-
-Expect `{"status":"UP"}`. Set `$baseUrl` in the README's PowerShell examples to
-your Render URL, then create two demo accounts, fund one, transfer money, and
-retry with the same key. The retry should return the original transaction ID.
-
-The health endpoint requires PostgreSQL to be reachable. Redis is excluded from
-health status in the Render profile because the application supports falling
-back to PostgreSQL when its cache is unavailable.
-
-## 7. How CD works after setup
-
-```text
-Push a feature branch -> CI runs -> Review and merge the pull request
-    -> CI runs on main -> All checks pass -> Render deploys main
-    -> Render checks /actuator/health before sending traffic to the new instance
-```
-
-`autoDeployTrigger: checksPass` tells Render to deploy after the linked branch's
-CI checks pass. Confirm the service's Auto-Deploy setting says **After CI Checks
-Pass**. The initial Blueprint creation starts the first deployment; later
-automatic deployments follow this setting.
-
-Render builds its own image from the checked commit. GitHub's Docker build
-checks the Dockerfile, but does not publish a container image. No deploy hook
-or Render API key is needed in the GitHub workflow for this arrangement.
-See [Render's deploy trigger settings](https://render.com/docs/blueprint-spec#autodeploytrigger).
+The optional `render.yaml` and the `render` profile are retained for Render
+accounts that can create services. They are not used by the Railway setup.
 
 ## Troubleshooting
 
 | Symptom | Check |
 | --- | --- |
-| JDBC URL error | URL starts with `jdbc:postgresql://` and contains `sslmode=require` |
-| Database connection fails | Supabase project is active; use the session-pooler host, port 5432, and its exact username |
-| Password authentication fails | Use the database password, not an API key |
-| App cannot reach Redis | Both Render services are in the same region and `REDIS_URL` is set |
-| Health check fails | Read startup logs and check the database connection and migrations |
-| First request is slow | A free Render service may be waking from sleep |
-| No deploy after a merge | Check CI for the main-branch commit and Render's Auto-Deploy setting |
+| Missing configuration on startup | All six Railway variables are set and the active profile is `cloud` |
+| JDBC connection fails | Supabase is active; use its session pooler on port 5432 and exact username |
+| Redis connection fails | Use a `rediss://` TCP URL, the correct password, and Upstash's displayed port |
+| Health is UP but Redis warnings appear | The API is using database fallback; fix the Redis connection separately |
+| Service is WAITING | Open GitHub Actions for the same main-branch commit and check its status |
+| API cannot be reached publicly | Generate a domain and use target port 8080 |
+| Trial credit is running low | Check Railway Usage and stop or delete the demo service when finished |

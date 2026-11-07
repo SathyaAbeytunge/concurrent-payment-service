@@ -8,8 +8,8 @@ COPY src/ src/
 
 # CI runs the full test suite with PostgreSQL and Redis before deployment.
 # The image build only packages the application and needs no running databases.
-RUN --mount=type=cache,target=/root/.m2 \
-    sh ./mvnw --batch-mode --no-transfer-progress -DskipTests package
+# Avoid service-specific cache mounts so this Dockerfile also validates on Railway.
+RUN sh ./mvnw --batch-mode --no-transfer-progress -DskipTests package
 
 # The final image contains a JRE and the application, without build tools.
 FROM eclipse-temurin:21-jre-noble

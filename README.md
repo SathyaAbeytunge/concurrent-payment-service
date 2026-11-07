@@ -274,7 +274,25 @@ After the workflow is on the default branch, you can also select **CI** and
 choose **Run workflow** to start it manually.
 
 CI builds and checks the application. Deployment to a running environment is a
-separate step called CD, which this workflow does not yet perform.
+separate step called CD. CI also checks that the Docker image builds. The Render
+deployment setup below can deploy `main` after its CI checks pass.
+
+## Run in Docker and deploy the demo
+
+To run the application, PostgreSQL, and Redis together in containers:
+
+```powershell
+docker compose -f docker-compose.yml -f compose.app.yml up --build -d
+```
+
+The application remains available at `http://localhost:8080`. Stop any copy
+already running on that port first.
+
+The free hosting setup uses **Render** for the application and Redis-compatible
+cache, and **Supabase** for PostgreSQL. See the
+[step-by-step deployment guide](docs/DEPLOYMENT.md) for account setup, connection
+settings, verification, and automatic deployment after CI passes. The hosted
+demo has no authentication; use fictional accounts and balances only.
 
 ## Stop the application
 

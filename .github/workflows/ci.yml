@@ -59,6 +59,9 @@ jobs:
       - name: Build and run all tests
         run: sh ./mvnw --batch-mode --no-transfer-progress clean verify
 
+      - name: Check the Docker image builds
+        run: docker build --tag concurrent-payment-service:ci .
+
       # Reports are especially useful when a test fails.
       - name: Save test reports
         if: ${{ always() }}

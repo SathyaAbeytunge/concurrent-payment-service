@@ -138,6 +138,17 @@ new intended transfer.
 | GET | `/accounts/{accountId}/ledger` | Get the account's transfer history, newest first |
 | POST | `/accounts/{accountId}/deposit` | Add demo funds |
 | POST | `/transfers` | Transfer funds; requires `Idempotency-Key` |
+| GET | `/transfers/{transactionId}` | Retrieve a saved transfer receipt; no idempotency key required |
+
+To retrieve a transfer later, use the `transactionId` returned when you created it:
+
+```powershell
+Invoke-RestMethod -Uri "$baseUrl/transfers/<transactionId>"
+```
+
+Replace `<transactionId>` with the actual ID. This returns the saved amount,
+accounts, currency, status, and creation time without moving money again.
+An unknown transfer returns `404`; an invalid UUID returns `400`.
 
 Deposit and transfer amounts must be between `0.0001` and
 `999999999999999.9999`, with at most four decimal places. Invalid amounts return

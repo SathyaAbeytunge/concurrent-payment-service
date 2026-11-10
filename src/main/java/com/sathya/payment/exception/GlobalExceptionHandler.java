@@ -15,6 +15,11 @@ import com.sathya.payment.exception.IdempotencyConflictException;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    @ExceptionHandler(TransferNotFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleTransferNotFound(TransferNotFoundException exception) {
+        return buildResponse(HttpStatus.NOT_FOUND, exception.getMessage());
+    }
+
     @ExceptionHandler(AccountNotFoundException.class)
     public ResponseEntity<Map<String, Object>> handleAccountNotFound(
             AccountNotFoundException exception) {

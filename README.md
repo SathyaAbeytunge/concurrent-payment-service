@@ -134,11 +134,24 @@ new intended transfer.
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
 | POST | `/accounts` | Create an account |
+| GET | `/accounts?userId=alice` | List a user's accounts, newest first |
 | GET | `/accounts/{accountId}` | Get an account and its current balance |
 | GET | `/accounts/{accountId}/ledger` | Get the account's transfer history, newest first |
 | POST | `/accounts/{accountId}/deposit` | Add demo funds |
 | POST | `/transfers` | Transfer funds; requires `Idempotency-Key` |
 | GET | `/transfers/{transactionId}` | Retrieve a saved transfer receipt; no idempotency key required |
+
+To find all accounts belonging to a user:
+
+```powershell
+Invoke-RestMethod -Uri "$baseUrl/accounts?userId=alice"
+```
+
+The user ID must match exactly. The response is an array of accounts with their
+current balances, newest first. A user with no accounts receives `[]`. Missing,
+blank, or longer than 64-character user IDs return `400`. This demo endpoint
+returns all matching accounts without pagination. Like the other endpoints, it
+has no authentication; a user ID filter does not verify ownership.
 
 To retrieve a transfer later, use the `transactionId` returned when you created it:
 

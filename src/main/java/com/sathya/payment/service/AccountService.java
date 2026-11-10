@@ -51,6 +51,13 @@ public class AccountService {
         return toResponse(account);
     }
 
+    @Transactional(readOnly = true)
+    public List<AccountResponse> getAccountsByUser(String userId) {
+        return accountRepository.findByUserIdOrderByCreatedAtDescIdAsc(userId).stream()
+                .map(this::toResponse)
+                .toList();
+    }
+
     /** Returns transfer entries only; demo funding is not recorded in the ledger. */
     @Transactional(readOnly = true)
     public List<LedgerEntryResponse> getLedgerHistory(UUID accountId) {

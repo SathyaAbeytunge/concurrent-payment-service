@@ -6,6 +6,8 @@ import com.sathya.payment.dto.CreateAccountRequest;
 import com.sathya.payment.dto.LedgerEntryResponse;
 import com.sathya.payment.service.AccountService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
@@ -20,6 +22,12 @@ import com.sathya.payment.dto.DepositRequest;
 public class AccountController {
 
     private final AccountService accountService;
+
+    @GetMapping
+    public List<AccountResponse> getAccountsByUser(
+            @RequestParam @NotBlank @Size(max = 64) String userId) {
+        return accountService.getAccountsByUser(userId);
+    }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
